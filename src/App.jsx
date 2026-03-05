@@ -17,6 +17,44 @@ const T = {
   pink:"#FF80AB", pinkDim:"#FF80AB20",
 };
 
+// ─── AI Error Diagnosis ───
+async function diagnoseError(errorMessage, workflowName, nodes, context) {
+  try {
+    const nodeList = (nodes || []).map(n => `${n.name} (${n.type?.split(".").pop()})`).join(" → ");
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514", max_tokens: 1000,
+        system: `You are an expert n8n workflow debugger. You diagnose n8n automation errors and provide clear, actionable fixes.
+
+Rules:
+- Be specific to n8n (mention exact settings, node names, credential pages)
+- Give step-by-step fixes a non-technical user can follow
+- If it's a credential issue, explain exactly where to go in n8n
+- If it's a rate limit, suggest specific retry/batching settings
+- If it's a code node error, suggest the fix
+- Keep it concise: diagnosis (1-2 sentences) + numbered fix steps (3-5 steps max)
+- Format: Start with "DIAGNOSIS:" then "FIX:" with numbered steps
+- If you can identify the likely failing node, mention it`,
+        messages: [{ role: "user", content: `n8n workflow "${workflowName}" failed with this error:
+
+ERROR: ${errorMessage}
+
+WORKFLOW NODES: ${nodeList || "Unknown"}
+${context ? `ADDITIONAL CONTEXT: ${context}` : ""}
+FAILURE COUNT: This error has occurred multiple times.
+
+Diagnose this error and give me exact steps to fix it in n8n.` }],
+      }),
+    });
+    const data = await res.json();
+    const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
+    return text || "Could not generate diagnosis.";
+  } catch (e) {
+    return `Diagnosis failed: ${e.message}. Check your connection.`;
+  }
+}
+
 // ─── Fallback data ───
 const FALLBACK_WORKFLOWS = [
   { id:"KVYPWLipE9wHV8qryccLI", name:"Inbound Lead Qualification", active:true, tags:["Inbound"], execCount:139, failedCount:14, successRate:"90", sparkline:[57,0,13,7,0,9,53], avgDuration:12000, p95Duration:45000, nodeCount:8, nodes:[{type:"n8n-nodes-base.webhook",name:"Webhook"},{type:"n8n-nodes-base.httpRequest",name:"Enrich Lead"},{type:"n8n-nodes-base.if",name:"Score Check"}], durationTrend:[{avg:11000,p95:40000,count:20},{avg:12000,p95:42000,count:18},{avg:11500,p95:44000,count:22},{avg:13000,p95:48000,count:15},{avg:12000,p95:45000,count:25}], topErrors:[], hourlyDistribution:{9:15,10:22,11:18,14:20,15:25}, recentExecutions:[] },
@@ -414,22 +452,19 @@ function DrillDown({ wf, onBack, retryExec, retrying }) {
       </Card>
     )}
 
-    {/* Top errors */}
+    {/* Top errors with AI diagnosis */}
     {wf.topErrors?.length > 0 && (
-      <Card title="TOP ERRORS" style={{ marginBottom: 12 }}>
+      <Card title="TOP ERRORS — AI DIAGNOSIS" style={{ marginBottom: 12 }}>
         {wf.topErrors.map((e, i) => (
-          <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: i < wf.topErrors.length - 1 ? `1px solid ${T.border}` : "none" }}>
-            <span style={{ fontSize: 11, color: T.red, flex: 1 }}>{e.message}</span>
-            <span style={{ fontSize: 11, color: T.textMuted, fontWeight: 700 }}>×{e.count}</span>
-          </div>
+          <ErrorWithDiagnosis key={i} error={e} workflowName={wf.name} nodes={wf.nodes} isLast={i === wf.topErrors.length - 1} />
         ))}
       </Card>
     )}
 
-    {/* Execution log with retry */}
+    {/* Execution log with retry + diagnose */}
     <Card title="RECENT EXECUTIONS">
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead><tr>{["#", "Status", "Time", "Duration", "Action"].map(h => <th key={h} style={thS}>{h}</th>)}</tr></thead>
+        <thead><tr>{["#", "Status", "Time", "Duration", "Actions"].map(h => <th key={h} style={thS}>{h}</th>)}</tr></thead>
         <tbody>{history.map(e => (
           <tr key={e.id} style={{ borderBottom: `1px solid ${T.border}` }}>
             <td style={{ ...tdS, color: T.textMuted }}>#{e.id}</td>
@@ -437,13 +472,23 @@ function DrillDown({ wf, onBack, retryExec, retrying }) {
             <td style={{ ...tdS, color: T.textDim }}>{timeAgo(e.startedAt)}</td>
             <td style={{ ...tdS, color: T.textDim }}>{fmt(e.duration)}</td>
             <td style={tdS}>{e.status === "error" && (
-              <button onClick={() => retryExec(e.id)} disabled={retrying.has(e.id)} style={{ ...pill, fontSize: 9, color: retrying.has(e.id) ? T.textMuted : T.amber, background: T.amberDim, padding: "2px 8px" }}>
-                {retrying.has(e.id) ? "Retrying..." : "↻ Retry"}
-              </button>
+              <div style={{ display: "flex", gap: 4 }}>
+                <button onClick={() => retryExec(e.id)} disabled={retrying.has(e.id)} style={{ ...pill, fontSize: 9, color: retrying.has(e.id) ? T.textMuted : T.amber, background: T.amberDim, padding: "2px 8px" }}>
+                  {retrying.has(e.id) ? "Retrying..." : "↻ Retry"}
+                </button>
+              </div>
             )}</td>
           </tr>
         ))}</tbody>
       </table>
+      {history.some(e => e.status === "error" && e.error) && (
+        <div style={{ marginTop: 12, borderTop: `1px solid ${T.border}`, paddingTop: 12 }}>
+          <div style={{ fontSize: 10, color: T.textMuted, fontWeight: 600, letterSpacing: 1, marginBottom: 8 }}>EXECUTION ERRORS</div>
+          {history.filter(e => e.status === "error" && e.error).slice(0, 5).map((e, i) => (
+            <ErrorWithDiagnosis key={i} error={{ message: e.error, count: 1 }} workflowName={wf.name} nodes={wf.nodes} isLast={i === history.filter(x => x.status === "error" && x.error).length - 1} />
+          ))}
+        </div>
+      )}
     </Card>
   </div>);
 }
@@ -515,28 +560,21 @@ function Tags({ workflows, onSelect }) {
 
 // ─── Errors Tab with Retry ───
 function Errors({ workflows, retryExec, retrying }) {
-  const allErrors = workflows.flatMap(w => (w.topErrors || []).map(e => ({ ...e, workflow: w.name, wfId: w.id })));
+  const allErrors = workflows.flatMap(w => (w.topErrors || []).map(e => ({ ...e, workflow: w.name, wfId: w.id, nodes: w.nodes })));
   const neverStarted = workflows.filter(w => w.topErrors?.some(e => e.message?.includes("never started") || e.message?.includes("null")));
   const instantFails = workflows.filter(w => w.avgDuration < 100 && w.failedCount > 0);
 
   return (<>
-    <h2 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Error Analysis</h2>
+    <h2 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Error Analysis & AI Diagnosis</h2>
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 16 }}>
       <Card><div style={{ fontSize: 24, fontWeight: 700, color: T.red }}>{allErrors.reduce((s, e) => s + e.count, 0)}</div><div style={{ fontSize: 10, color: T.textMuted, marginTop: 4 }}>Total Error Occurrences</div></Card>
       <Card><div style={{ fontSize: 24, fontWeight: 700, color: T.amber }}>{neverStarted.length}</div><div style={{ fontSize: 10, color: T.textMuted, marginTop: 4 }}>Never-Started Workflows</div></Card>
       <Card><div style={{ fontSize: 24, fontWeight: 700, color: T.pink }}>{instantFails.length}</div><div style={{ fontSize: 10, color: T.textMuted, marginTop: 4 }}>Instant Failures (&lt;100ms)</div></Card>
     </div>
-    <Card title="ALL ERRORS BY WORKFLOW">
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead><tr>{["Workflow", "Error", "Count"].map(h => <th key={h} style={thS}>{h}</th>)}</tr></thead>
-        <tbody>{allErrors.sort((a, b) => b.count - a.count).map((e, i) => (
-          <tr key={i} style={{ borderBottom: `1px solid ${T.border}` }}>
-            <td style={{ ...tdS, fontSize: 11 }}>{e.workflow}</td>
-            <td style={{ ...tdS, color: T.red, fontSize: 10 }}>{e.message}</td>
-            <td style={{ ...tdS, fontWeight: 700 }}>×{e.count}</td>
-          </tr>
-        ))}</tbody>
-      </table>
+    <Card title="ALL ERRORS — CLICK DIAGNOSE FOR AI FIX">
+      {allErrors.sort((a, b) => b.count - a.count).map((e, i) => (
+        <ErrorWithDiagnosis key={i} error={e} workflowName={e.workflow} nodes={e.nodes} isLast={i === allErrors.length - 1} showWorkflow />
+      ))}
     </Card>
   </>);
 }
@@ -699,6 +737,142 @@ function AlertsSection({ config, setConfig, session, slackConfigured, setSlackCo
       </Card>
     )}
   </div>);
+}
+
+// ═══════════════════════════════════════════════
+// ERROR WITH AI DIAGNOSIS
+// ═══════════════════════════════════════════════
+function ErrorWithDiagnosis({ error, workflowName, nodes, isLast, showWorkflow }) {
+  const [diagnosis, setDiagnosis] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  const runDiagnosis = async () => {
+    if (diagnosis) { setExpanded(!expanded); return; }
+    setLoading(true); setExpanded(true);
+    const result = await diagnoseError(error.message, workflowName, nodes);
+    setDiagnosis(result);
+    setLoading(false);
+  };
+
+  // Parse diagnosis into structured sections
+  const parseDiagnosis = (text) => {
+    if (!text) return null;
+    const lines = text.split("\n").filter(l => l.trim());
+    let diagnosisText = "";
+    let fixSteps = [];
+    let inFix = false;
+
+    for (const line of lines) {
+      if (line.toUpperCase().includes("FIX:") || line.toUpperCase().includes("STEPS:") || line.toUpperCase().includes("SOLUTION:")) {
+        inFix = true; continue;
+      }
+      if (line.toUpperCase().includes("DIAGNOSIS:") || line.toUpperCase().includes("CAUSE:") || line.toUpperCase().includes("ISSUE:")) {
+        diagnosisText = line.replace(/^.*?:\s*/i, ""); inFix = false; continue;
+      }
+      if (inFix) {
+        const cleaned = line.replace(/^\d+[\.\)]\s*/, "").replace(/^[-*]\s*/, "").trim();
+        if (cleaned) fixSteps.push(cleaned);
+      } else if (!diagnosisText && !line.startsWith("#")) {
+        diagnosisText += (diagnosisText ? " " : "") + line.trim();
+      }
+    }
+    // If no structured parsing worked, just split into chunks
+    if (!diagnosisText && fixSteps.length === 0) {
+      diagnosisText = lines.slice(0, 2).join(" ");
+      fixSteps = lines.slice(2);
+    }
+    return { diagnosisText, fixSteps };
+  };
+
+  const parsed = diagnosis ? parseDiagnosis(diagnosis) : null;
+
+  return (
+    <div style={{ borderBottom: isLast ? "none" : `1px solid ${T.border}`, padding: "10px 0" }}>
+      {/* Error header row */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {showWorkflow && <div style={{ fontSize: 10, color: T.textDim, marginBottom: 2 }}>{workflowName}</div>}
+          <div style={{ fontSize: 12, color: T.red, lineHeight: 1.4 }}>{error.message}</div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          <span style={{ fontSize: 11, color: T.textMuted, fontWeight: 700 }}>×{error.count}</span>
+          <button onClick={runDiagnosis} disabled={loading} style={{
+            background: expanded && diagnosis ? T.greenDim : "linear-gradient(135deg, #B388FF22, #00E67622)",
+            color: expanded && diagnosis ? T.green : T.purple,
+            border: `1px solid ${expanded && diagnosis ? T.green + "40" : T.purple + "40"}`,
+            borderRadius: 6, padding: "5px 12px", fontSize: 10, fontFamily: font,
+            cursor: loading ? "wait" : "pointer", fontWeight: 600,
+            display: "flex", alignItems: "center", gap: 5,
+            opacity: loading ? 0.7 : 1, transition: "all 0.2s",
+          }}>
+            {loading ? (<><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", border: `2px solid ${T.purple}`, borderTopColor: "transparent", animation: "spin 0.8s linear infinite" }} />Diagnosing...</>) : diagnosis ? (expanded ? "▼ Hide Fix" : "▶ Show Fix") : "🔍 Diagnose"}
+          </button>
+        </div>
+      </div>
+
+      {/* Diagnosis panel */}
+      {expanded && (loading || diagnosis) && (
+        <div style={{ marginTop: 10, background: T.bg, border: `1px solid ${T.borderBright}`, borderRadius: 8, overflow: "hidden" }}>
+          {loading ? (
+            <div style={{ padding: 20, textAlign: "center" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                <div style={{ width: 10, height: 10, borderRadius: "50%", background: T.purple, boxShadow: `0 0 12px ${T.purple}`, animation: "pulse 1.5s infinite" }} />
+                <span style={{ fontSize: 11, color: T.textDim }}>AI analyzing error pattern...</span>
+              </div>
+            </div>
+          ) : parsed ? (
+            <div>
+              {/* Diagnosis */}
+              <div style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, background: `${T.red}06` }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                  <span style={{ fontSize: 14 }}>🔍</span>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: T.red, letterSpacing: 1 }}>DIAGNOSIS</span>
+                </div>
+                <div style={{ fontSize: 12, color: T.text, lineHeight: 1.6, fontFamily: "system-ui, -apple-system, sans-serif" }}>{parsed.diagnosisText}</div>
+              </div>
+
+              {/* Fix steps */}
+              {parsed.fixSteps.length > 0 && (
+                <div style={{ padding: "12px 16px", background: `${T.green}06` }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+                    <span style={{ fontSize: 14 }}>🔧</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: T.green, letterSpacing: 1 }}>HOW TO FIX</span>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {parsed.fixSteps.map((step, i) => (
+                      <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                        <div style={{
+                          width: 22, height: 22, borderRadius: "50%", flexShrink: 0,
+                          background: T.greenDim, border: `1px solid ${T.green}30`,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          fontSize: 10, color: T.green, fontWeight: 700,
+                        }}>{i + 1}</div>
+                        <span style={{ fontSize: 12, color: T.textDim, lineHeight: 1.6, paddingTop: 2, fontFamily: "system-ui, -apple-system, sans-serif" }}>{step}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Raw fallback if parsing didn't produce steps */}
+              {parsed.fixSteps.length === 0 && !parsed.diagnosisText && (
+                <div style={{ padding: "12px 16px" }}>
+                  <pre style={{ fontSize: 11, color: T.textDim, whiteSpace: "pre-wrap", lineHeight: 1.6, margin: 0, fontFamily: "system-ui, sans-serif" }}>{diagnosis}</pre>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{ padding: "12px 16px" }}>
+              <pre style={{ fontSize: 11, color: T.textDim, whiteSpace: "pre-wrap", lineHeight: 1.6, margin: 0 }}>{diagnosis}</pre>
+            </div>
+          )}
+        </div>
+      )}
+
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  );
 }
 
 // ═══════════════════════════════════════════════
