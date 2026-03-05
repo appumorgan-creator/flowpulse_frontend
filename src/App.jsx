@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+mport { useState, useEffect, useCallback, useMemo } from "react";
 
 const BACKEND_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 const mono = "'JetBrains Mono','Fira Code','SF Mono',monospace";
