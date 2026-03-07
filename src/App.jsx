@@ -1,4 +1,4 @@
-// FlowPulse Command Center v3
+// FlowPulse Command Center v3 
 import { useState, useEffect, useCallback, useMemo } from "react";
 
 const BACKEND_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
