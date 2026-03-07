@@ -1,5 +1,65 @@
-// FlowPulse Command Center v3 
-import { useState, useEffect, useCallback, useMemo } from "react";
+// FlowPulse Command Center v3
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+
+// ─── Animated Counter Hook ───
+function useAnimatedValue(target, duration = 1200) {
+  const [display, setDisplay] = useState(0);
+  const prevRef = useRef(0);
+  const frameRef = useRef(null);
+
+  useEffect(() => {
+    const num = typeof target === "string" ? parseFloat(target.replace(/[^0-9.-]/g, "")) : target;
+    if (isNaN(num)) { setDisplay(target); return; }
+
+    const start = prevRef.current;
+    const diff = num - start;
+    if (diff === 0) return;
+
+    const startTime = performance.now();
+    const animate = (now) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      // Ease out cubic
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const current = start + diff * eased;
+      setDisplay(current);
+      if (progress < 1) {
+        frameRef.current = requestAnimationFrame(animate);
+      } else {
+        prevRef.current = num;
+      }
+    };
+    frameRef.current = requestAnimationFrame(animate);
+    return () => { if (frameRef.current) cancelAnimationFrame(frameRef.current); };
+  }, [target, duration]);
+
+  return display;
+}
+
+// Format animated number for display
+function AnimatedNum({ value, prefix = "", suffix = "", decimals = 0 }) {
+  const num = typeof value === "string" ? parseFloat(value.replace(/[^0-9.-]/g, "")) : value;
+  const isNum = !isNaN(num) && isFinite(num);
+  const animated = useAnimatedValue(isNum ? num : 0);
+
+  if (!isNum) return <span>{value}</span>;
+
+  const formatted = decimals > 0
+    ? animated.toFixed(decimals)
+    : Math.round(animated).toLocaleString();
+
+  return <span>{prefix}{formatted}{suffix}</span>;
+}
+
+// Animated bar that grows from 0
+function AnimatedBar({ height, color, delay = 0, style = {} }) {
+  const [h, setH] = useState(0);
+  useEffect(() => {
+    const t = setTimeout(() => setH(height), 50 + delay);
+    return () => clearTimeout(t);
+  }, [height, delay]);
+  return <div style={{ ...style, height: h, background: color, transition: `height 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) ${delay}ms`, borderRadius: style.borderRadius || 6 }} />;
+}
 
 const BACKEND_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 const mono = "'JetBrains Mono','Fira Code','SF Mono',monospace";
@@ -133,6 +193,8 @@ export default function FlowPulseCommand() {
 
   const navItems = [
     {key:"n8n",label:"Workflows",color:T.green,icon:"⚡"},
+    {key:"enrichment",label:"Enrichment",color:"#F59E0B",icon:"🧬"},
+    {key:"integrations",label:"Integrations",color:T.amber,icon:"🔌"},
     {key:"kpis",label:"KPIs",color:T.cyan,icon:"📊"},
     {key:"hubspot",label:"HubSpot",color:T.purple,icon:"💼"},
     {key:"ads",label:"Google Ads",color:T.blue,icon:"📈"},
@@ -197,6 +259,8 @@ export default function FlowPulseCommand() {
       {/* ─── Content ─── */}
       <div style={{maxWidth:1400,margin:"0 auto",padding:"20px 28px 60px"}}>
         {section==="n8n"&&<N8nSection workflows={workflows} stats={stats} heatmap={heatmapData} tab={n8nTab} setTab={setN8nTab} selectedWf={selectedWf} setSelectedWf={setSelectedWf} retryExec={retryExec} retrying={retrying}/>}
+        {section==="enrichment"&&<EnrichmentMarketplace workflows={workflows}/>}
+        {section==="integrations"&&<IntegrationsSection connected={connected} hubData={hubData} adsData={adsData} slackConfigured={slackConfigured} stats={stats} workflows={workflows}/>}
         {section==="kpis"&&<KPIs workflows={workflows} stats={stats} hubData={hubData} adsData={adsData}/>}
         {section==="hubspot"&&<HubSpot data={hubData} loading={hubLoading} onFetch={fetchHub}/>}
         {section==="ads"&&<Ads data={adsData} loading={adsLoading} onFetch={fetchAds}/>}
@@ -258,10 +322,10 @@ function Overview({stats,workflows,onSelect}) {
             const h=maxDay>0?(val/maxDay)*100:0;
             return (
               <div key={i} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
-                {/* Number label on top */}
-                <span style={{fontFamily:mono,fontSize:12,fontWeight:700,color:val>0?T.green:T.textMuted}}>{val}</span>
+                {/* Number label on top — animated */}
+                <span style={{fontFamily:mono,fontSize:12,fontWeight:700,color:val>0?T.green:T.textMuted}}><AnimatedNum value={val}/></span>
                 {/* Bar */}
-                <div style={{width:"100%",maxWidth:48,borderRadius:6,background:val>0?T.greenGrad:T.surface2,height:Math.max(h,4),transition:"height 0.5s ease",position:"relative",boxShadow:val>0?`0 2px 12px ${T.greenDim}`:"none"}}/>
+                <AnimatedBar height={Math.max(h,4)} color={val>0?T.greenGrad:T.surface2} delay={i*80} style={{width:"100%",maxWidth:48,borderRadius:6,boxShadow:val>0?`0 2px 12px ${T.greenDim}`:"none"}} />
                 {/* Day label */}
                 <span style={{fontFamily:sans,fontSize:11,color:T.textMuted,fontWeight:500}}>{dayLabels[i]}</span>
               </div>
@@ -270,7 +334,7 @@ function Overview({stats,workflows,onSelect}) {
         </div>
         <div style={{borderTop:`1px solid ${T.border}`,paddingTop:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <span style={{fontFamily:sans,fontSize:11,color:T.textMuted}}>Total this week</span>
-          <span style={{fontFamily:mono,fontSize:16,fontWeight:700,color:T.green}}>{dayTotals.reduce((a,b)=>a+b,0)}</span>
+          <span style={{fontFamily:mono,fontSize:16,fontWeight:700,color:T.green}}><AnimatedNum value={dayTotals.reduce((a,b)=>a+b,0)}/></span>
         </div>
       </Card>
 
@@ -492,7 +556,7 @@ function DrillDown({wf,onBack,retryExec,retrying}) {
     <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:20}}>
       <div style={{width:12,height:12,borderRadius:"50%",background:wf.active?T.green:T.textMuted,boxShadow:wf.active?`0 0 8px ${T.green}`:"none"}}/>
       <h2 style={{fontFamily:sans,fontSize:22,fontWeight:700,margin:0}}>{wf.name}</h2>
-      <span style={{fontFamily:mono,fontSize:28,fontWeight:700,color:c,marginLeft:"auto"}}>{wf.successRate}%</span>
+      <span style={{fontFamily:mono,fontSize:28,fontWeight:700,color:c,marginLeft:"auto"}}><AnimatedNum value={Number(wf.successRate)} suffix="%" decimals={0}/></span>
     </div>
     <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12,marginBottom:20}}>
       <BigStat label="Runs" value={wf.execCount} color={T.cyan} icon="🔄"/>
@@ -555,35 +619,715 @@ function DrillDown({wf,onBack,retryExec,retrying}) {
 // ═══════════════════════════════════════
 // KPIs
 // ═══════════════════════════════════════
+// ═══════════════════════════════════════
+// INTEGRATIONS SECTION
+// ═══════════════════════════════════════
+// ═══════════════════════════════════════
+// ENRICHMENT MARKETPLACE
+// ═══════════════════════════════════════
+const ENRICHMENT_TOOLS = [
+  {
+    id:"zoominfo",name:"ZoomInfo",icon:"🔎",color:"#6366F1",
+    tagline:"Enterprise B2B intelligence",
+    tier:"Enterprise",pricing:"$$$",
+    capabilities:["company","contact","intent","techstack"],
+    dataPoints:["Revenue, employees, industry","Direct dials, emails, titles","Buying intent signals","Technology stack"],
+    coverage:"300M+ contacts, 100M+ companies",
+    avgEnrichRate:94,creditsPerLookup:1,
+    n8nNode:"n8n-nodes-base.httpRequest",
+    useCases:["Account scoring","ICP matching","Lead routing"],
+  },
+  {
+    id:"apollo",name:"Apollo.io",icon:"🚀",color:"#8B5CF6",
+    tagline:"Sales intelligence & engagement",
+    tier:"Growth",pricing:"$$",
+    capabilities:["contact","company","email_verify","social"],
+    dataPoints:["Verified emails & phones","Company firmographics","Email deliverability scores","LinkedIn profiles"],
+    coverage:"270M+ contacts, 60M+ companies",
+    avgEnrichRate:87,creditsPerLookup:1,
+    n8nNode:"n8n-nodes-base.httpRequest",
+    useCases:["Outbound sequences","Email finding","Contact discovery"],
+  },
+  {
+    id:"clearbit",name:"Clearbit / Breeze",icon:"✨",color:"#3B82F6",
+    tagline:"Real-time enrichment APIs",
+    tier:"Mid-market",pricing:"$$",
+    capabilities:["company","contact","visitor_id","techstack"],
+    dataPoints:["50+ company attributes","Contact role & seniority","Website visitor reveal","Tech stack detection"],
+    coverage:"50M+ companies, real-time",
+    avgEnrichRate:82,creditsPerLookup:1,
+    n8nNode:"n8n-nodes-base.httpRequest",
+    useCases:["Form enrichment","Lead scoring","Website personalization"],
+  },
+  {
+    id:"clay",name:"Clay",icon:"🏺",color:"#EC4899",
+    tagline:"Waterfall enrichment platform",
+    tier:"Growth",pricing:"$$",
+    capabilities:["company","contact","email_verify","social","techstack"],
+    dataPoints:["Multi-source waterfall","75+ enrichment providers","AI-powered research","Automated workflows"],
+    coverage:"Aggregates multiple sources",
+    avgEnrichRate:96,creditsPerLookup:5,
+    n8nNode:"n8n-nodes-base.httpRequest",
+    useCases:["Waterfall enrichment","Account research","List building"],
+  },
+  {
+    id:"hunter",name:"Hunter.io",icon:"🎯",color:"#F97316",
+    tagline:"Email finding & verification",
+    tier:"Starter",pricing:"$",
+    capabilities:["email_verify","contact"],
+    dataPoints:["Email addresses","Confidence scores","Domain search","Bulk verification"],
+    coverage:"100M+ email addresses",
+    avgEnrichRate:78,creditsPerLookup:1,
+    n8nNode:"n8n-nodes-base.hunter",
+    useCases:["Email finding","Deliverability check","Domain prospecting"],
+  },
+  {
+    id:"lusha",name:"Lusha",icon:"📞",color:"#10B981",
+    tagline:"B2B contact & company data",
+    tier:"Mid-market",pricing:"$$",
+    capabilities:["contact","company"],
+    dataPoints:["Direct phone numbers","Business emails","Company data","Decision-maker contacts"],
+    coverage:"100M+ business profiles",
+    avgEnrichRate:80,creditsPerLookup:1,
+    n8nNode:"n8n-nodes-base.httpRequest",
+    useCases:["Phone prospecting","Contact enrichment","Sales outreach"],
+  },
+  {
+    id:"linkedin",name:"LinkedIn Sales Nav",icon:"💼",color:"#0077B5",
+    tagline:"Professional network data",
+    tier:"Enterprise",pricing:"$$$",
+    capabilities:["contact","social","intent","company"],
+    dataPoints:["Job titles & history","Company pages","InMail data","Relationship mapping"],
+    coverage:"900M+ professionals",
+    avgEnrichRate:91,creditsPerLookup:0,
+    n8nNode:"n8n-nodes-base.httpRequest",
+    useCases:["Lead research","Warm intros","Account mapping"],
+  },
+  {
+    id:"builtwith",name:"BuiltWith / Wappalyzer",icon:"🔧",color:"#EAB308",
+    tagline:"Technology stack detection",
+    tier:"Starter",pricing:"$",
+    capabilities:["techstack","visitor_id"],
+    dataPoints:["Technologies used","CMS & frameworks","Analytics tools","Marketing stack"],
+    coverage:"250M+ websites",
+    avgEnrichRate:95,creditsPerLookup:1,
+    n8nNode:"n8n-nodes-base.httpRequest",
+    useCases:["Competitive analysis","ICP tech filtering","Market sizing"],
+  },
+];
+
+const ENRICHMENT_TYPES = [
+  {id:"company",label:"Company Enrichment",icon:"🏢",desc:"Firmographics, revenue, employee count, industry",color:"#60A5FA"},
+  {id:"contact",label:"Contact Enrichment",icon:"👤",desc:"Email, phone, title, seniority, department",color:"#A78BFA"},
+  {id:"techstack",label:"Tech Stack Detection",icon:"⚙️",desc:"Software, tools, frameworks a company uses",color:"#FBBF24"},
+  {id:"intent",label:"Intent Data",icon:"🎯",desc:"Buying signals, research activity, content consumption",color:"#F87171"},
+  {id:"email_verify",label:"Email Verification",icon:"✉️",desc:"Deliverability check, bounce prediction, catch-all detection",color:"#34D399"},
+  {id:"social",label:"Social Profiles",icon:"🌐",desc:"LinkedIn, Twitter, company social presence",color:"#22D3EE"},
+  {id:"visitor_id",label:"Visitor Identification",icon:"👁️",desc:"De-anonymize website visitors into companies/contacts",color:"#F472B6"},
+];
+
+function EnrichmentMarketplace({workflows}) {
+  const [subTab,setSubTab]=useState("marketplace");
+  const [connectedTools,setConnectedTools]=useState(new Set(["zoominfo"])); // demo: zoominfo pre-connected
+  const [selectedTool,setSelectedTool]=useState(null);
+  const [filter,setFilter]=useState("all");
+  const [search,setSearch]=useState("");
+
+  const toggleConnect=(id)=>{
+    setConnectedTools(prev=>{const n=new Set(prev);if(n.has(id))n.delete(id);else n.add(id);return n;});
+  };
+
+  const filteredTools = ENRICHMENT_TOOLS.filter(t=>{
+    if(filter!=="all"&&!t.capabilities.includes(filter)) return false;
+    if(search&&!t.name.toLowerCase().includes(search.toLowerCase())&&!t.tagline.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
+  const connectedCount=connectedTools.size;
+  const totalCapabilities=new Set(ENRICHMENT_TOOLS.filter(t=>connectedTools.has(t.id)).flatMap(t=>t.capabilities)).size;
+  const avgEnrichRate=connectedCount>0?Math.round(ENRICHMENT_TOOLS.filter(t=>connectedTools.has(t.id)).reduce((s,t)=>s+t.avgEnrichRate,0)/connectedCount):0;
+
+  return (<div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+      <div>
+        <h2 style={{fontFamily:sans,fontSize:18,fontWeight:700,margin:0}}>Enrichment Marketplace</h2>
+        <p style={{fontFamily:sans,fontSize:12,color:T.textMuted,margin:"4px 0 0"}}>Browse, connect, and monitor your enrichment tools</p>
+      </div>
+      <div style={{display:"flex",gap:4}}>
+        {[{k:"marketplace",l:"🛒 Marketplace"},{k:"pipeline",l:"🔗 Pipeline"},{k:"coverage",l:"📊 Coverage"}].map(t=>
+          <button key={t.k} onClick={()=>setSubTab(t.k)} style={{background:subTab===t.k?"#F59E0B18":"transparent",color:subTab===t.k?"#F59E0B":T.textMuted,border:subTab===t.k?"1px solid #F59E0B40":"1px solid transparent",borderRadius:8,padding:"7px 16px",fontFamily:sans,fontSize:12,cursor:"pointer",fontWeight:subTab===t.k?600:400}}>{t.l}</button>
+        )}
+      </div>
+    </div>
+
+    {subTab==="marketplace"&&<>
+      {/* Stats */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:16}}>
+        <BigStat label="Tools Connected" value={connectedCount} sub={`of ${ENRICHMENT_TOOLS.length} available`} color={T.green} icon="🔌"/>
+        <BigStat label="Enrichment Types" value={totalCapabilities} sub={`of ${ENRICHMENT_TYPES.length} types covered`} color={T.cyan} icon="🧬"/>
+        <BigStat label="Avg Match Rate" value={`${avgEnrichRate}%`} sub="across connected tools" color={T.amber} icon="🎯"/>
+        <BigStat label="Est. Credits/Day" value={connectedCount*50} sub="based on workflow volume" color={T.purple} icon="🪙"/>
+      </div>
+
+      {/* Search + Filter */}
+      <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search tools..." style={{...inputS,minWidth:200}}/>
+        <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+          <button onClick={()=>setFilter("all")} style={{background:filter==="all"?"#F59E0B18":"transparent",color:filter==="all"?"#F59E0B":T.textMuted,border:filter==="all"?"1px solid #F59E0B40":"1px solid transparent",borderRadius:20,padding:"5px 12px",fontFamily:sans,fontSize:10,cursor:"pointer",fontWeight:filter==="all"?600:400}}>All</button>
+          {ENRICHMENT_TYPES.map(et=>
+            <button key={et.id} onClick={()=>setFilter(et.id)} style={{background:filter===et.id?`${et.color}18`:"transparent",color:filter===et.id?et.color:T.textMuted,border:filter===et.id?`1px solid ${et.color}40`:"1px solid transparent",borderRadius:20,padding:"5px 12px",fontFamily:sans,fontSize:10,cursor:"pointer",fontWeight:filter===et.id?600:400,display:"flex",alignItems:"center",gap:4}}><span style={{fontSize:10}}>{et.icon}</span>{et.label.split(" ")[0]}</button>
+          )}
+        </div>
+      </div>
+
+      {/* Tool Cards */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(340px,1fr))",gap:12}}>
+        {filteredTools.map(tool=>{
+          const isConn=connectedTools.has(tool.id);
+          return (
+            <div key={tool.id} style={{background:T.surface,border:`1px solid ${isConn?`${tool.color}40`:T.border}`,borderRadius:14,overflow:"hidden",transition:"all 0.2s"}} onMouseEnter={e=>e.currentTarget.style.transform="translateY(-2px)"} onMouseLeave={e=>e.currentTarget.style.transform="none"}>
+              {/* Top color bar */}
+              <div style={{height:3,background:isConn?tool.color:`${tool.color}30`}}/>
+              <div style={{padding:18}}>
+                {/* Header */}
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+                  <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                    <div style={{width:44,height:44,borderRadius:12,background:`${tool.color}15`,border:`1px solid ${tool.color}30`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22}}>{tool.icon}</div>
+                    <div>
+                      <div style={{fontFamily:sans,fontSize:15,fontWeight:700}}>{tool.name}</div>
+                      <div style={{fontFamily:sans,fontSize:11,color:T.textMuted}}>{tool.tagline}</div>
+                    </div>
+                  </div>
+                  {/* Pricing badge */}
+                  <div style={{background:T.surface2,borderRadius:8,padding:"4px 10px",display:"flex",alignItems:"center",gap:4}}>
+                    <span style={{fontFamily:mono,fontSize:11,color:"#F59E0B",fontWeight:700}}>{tool.pricing}</span>
+                    <span style={{fontFamily:sans,fontSize:9,color:T.textMuted}}>{tool.tier}</span>
+                  </div>
+                </div>
+
+                {/* Capabilities */}
+                <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:12}}>
+                  {tool.capabilities.map(cap=>{
+                    const et=ENRICHMENT_TYPES.find(e=>e.id===cap);
+                    return et?<span key={cap} style={{fontFamily:sans,fontSize:9,color:et.color,background:`${et.color}12`,border:`1px solid ${et.color}25`,padding:"3px 8px",borderRadius:12,display:"flex",alignItems:"center",gap:3}}><span style={{fontSize:8}}>{et.icon}</span>{et.label.split(" ")[0]}</span>:null;
+                  })}
+                </div>
+
+                {/* Data points */}
+                <div style={{marginBottom:12}}>
+                  {tool.dataPoints.map((dp,i)=>(
+                    <div key={i} style={{fontFamily:sans,fontSize:11,color:T.textDim,padding:"3px 0",display:"flex",gap:6}}>
+                      <span style={{color:tool.color}}>•</span>{dp}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Stats row */}
+                <div style={{display:"flex",gap:16,padding:"10px 0",borderTop:`1px solid ${T.border}`,borderBottom:`1px solid ${T.border}`,marginBottom:12}}>
+                  <div><span style={{fontFamily:sans,fontSize:9,color:T.textMuted}}>Match Rate</span><div style={{fontFamily:mono,fontSize:13,fontWeight:700,color:T.green}}>{tool.avgEnrichRate}%</div></div>
+                  <div><span style={{fontFamily:sans,fontSize:9,color:T.textMuted}}>Coverage</span><div style={{fontFamily:sans,fontSize:11,color:T.text,fontWeight:500}}>{tool.coverage.split(",")[0]}</div></div>
+                  <div><span style={{fontFamily:sans,fontSize:9,color:T.textMuted}}>n8n Node</span><div style={{fontFamily:mono,fontSize:10,color:T.cyan}}>{tool.n8nNode.split(".").pop()}</div></div>
+                </div>
+
+                {/* Use cases */}
+                <div style={{display:"flex",gap:4,marginBottom:14}}>
+                  {tool.useCases.map((uc,i)=><span key={i} style={{fontFamily:sans,fontSize:9,color:T.textMuted,background:T.bg,padding:"3px 8px",borderRadius:8,border:`1px solid ${T.border}`}}>{uc}</span>)}
+                </div>
+
+                {/* Connect button */}
+                <button onClick={()=>toggleConnect(tool.id)} style={{
+                  width:"100%",padding:"10px 0",borderRadius:10,fontFamily:sans,fontSize:12,fontWeight:700,cursor:"pointer",
+                  transition:"all 0.2s",display:"flex",alignItems:"center",justifyContent:"center",gap:8,
+                  background:isConn?`${tool.color}15`:tool.color,
+                  color:isConn?tool.color:"#fff",
+                  border:isConn?`1px solid ${tool.color}40`:"none",
+                  boxShadow:isConn?"none":`0 4px 16px ${tool.color}30`,
+                }}>
+                  {isConn?<><span style={{width:8,height:8,borderRadius:"50%",background:T.green,boxShadow:`0 0 6px ${T.green}`}}/>Connected — Click to Disconnect</>:<>Connect {tool.name}</>}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </>}
+
+    {subTab==="pipeline"&&<EnrichmentPipeline connectedTools={connectedTools}/>}
+    {subTab==="coverage"&&<EnrichmentCoverage connectedTools={connectedTools}/>}
+  </div>);
+}
+
+// ─── Enrichment Pipeline View ───
+function EnrichmentPipeline({connectedTools}) {
+  const connected=ENRICHMENT_TOOLS.filter(t=>connectedTools.has(t.id));
+  const stages=[
+    {name:"Raw Lead In",icon:"📥",desc:"New lead enters from form, ad, or import",count:1000},
+    {name:"Company Enrichment",icon:"🏢",desc:"Firmographics, revenue, industry",tools:connected.filter(t=>t.capabilities.includes("company")),count:940},
+    {name:"Contact Enrichment",icon:"👤",desc:"Email, phone, title, seniority",tools:connected.filter(t=>t.capabilities.includes("contact")),count:870},
+    {name:"Tech Stack Check",icon:"⚙️",desc:"What software do they use?",tools:connected.filter(t=>t.capabilities.includes("techstack")),count:870},
+    {name:"Email Verification",icon:"✉️",desc:"Is the email deliverable?",tools:connected.filter(t=>t.capabilities.includes("email_verify")),count:810},
+    {name:"Intent Scoring",icon:"🎯",desc:"Are they actively buying?",tools:connected.filter(t=>t.capabilities.includes("intent")),count:380},
+    {name:"Enriched Lead Out",icon:"✅",desc:"Fully enriched → CRM / Outbound",count:380},
+  ];
+  const maxCount=Math.max(...stages.map(s=>s.count));
+
+  return (<div style={{display:"flex",flexDirection:"column",gap:12}}>
+    <Card title="Enrichment Pipeline — How Data Flows Through Your Tools">
+      {stages.map((stage,i)=>{
+        const w=(stage.count/maxCount)*100;
+        return (
+          <div key={i} style={{padding:"14px 0",borderBottom:i<stages.length-1?`1px solid ${T.border}`:"none"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <span style={{fontSize:20}}>{stage.icon}</span>
+                <div>
+                  <div style={{fontFamily:sans,fontSize:13,fontWeight:600}}>{stage.name}</div>
+                  <div style={{fontFamily:sans,fontSize:10,color:T.textMuted}}>{stage.desc}</div>
+                </div>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                {stage.tools&&stage.tools.length>0&&(
+                  <div style={{display:"flex",gap:3}}>{stage.tools.map(t=><span key={t.id} style={{fontSize:9,color:t.color,background:`${t.color}15`,border:`1px solid ${t.color}30`,padding:"2px 8px",borderRadius:12,fontFamily:sans,fontWeight:600}}>{t.name}</span>)}</div>
+                )}
+                {stage.tools&&stage.tools.length===0&&<span style={{fontFamily:sans,fontSize:10,color:T.red}}>No tool connected</span>}
+                <span style={{fontFamily:mono,fontSize:14,fontWeight:700,color:T.text}}><AnimatedNum value={stage.count}/></span>
+              </div>
+            </div>
+            {/* Pipeline bar */}
+            <div style={{height:8,borderRadius:4,background:T.surface2,overflow:"hidden"}}>
+              <AnimatedBar height={8} color={i===0||i===stages.length-1?T.greenGrad:stage.tools?.length>0?`${T.green}60`:`${T.red}30`} delay={i*100} style={{width:`${w}%`,borderRadius:4}}/>
+            </div>
+            {i<stages.length-1&&i>0&&stage.count<stages[i-1].count&&(
+              <div style={{fontFamily:sans,fontSize:9,color:T.amber,marginTop:4}}>↓ {((1-stage.count/stages[i-1].count)*100).toFixed(0)}% drop — {stages[i-1].count-stage.count} records lost</div>
+            )}
+          </div>
+        );
+      })}
+    </Card>
+
+    {/* What's missing */}
+    {ENRICHMENT_TYPES.filter(et=>!ENRICHMENT_TOOLS.some(t=>connectedTools.has(t.id)&&t.capabilities.includes(et.id))).length>0&&(
+      <Card title="⚠️ Gaps in Your Enrichment Stack">
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8}}>
+          {ENRICHMENT_TYPES.filter(et=>!ENRICHMENT_TOOLS.some(t=>connectedTools.has(t.id)&&t.capabilities.includes(et.id))).map(et=>(
+            <div key={et.id} style={{background:T.bg,border:`1px solid ${T.red}20`,borderRadius:10,padding:12}}>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                <span style={{fontSize:14}}>{et.icon}</span>
+                <span style={{fontFamily:sans,fontSize:12,fontWeight:600,color:T.red}}>{et.label}</span>
+              </div>
+              <div style={{fontFamily:sans,fontSize:10,color:T.textMuted}}>{et.desc}</div>
+              <div style={{fontFamily:sans,fontSize:9,color:T.amber,marginTop:6}}>→ {ENRICHMENT_TOOLS.filter(t=>t.capabilities.includes(et.id)).map(t=>t.name).join(", ")} can fill this</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    )}
+  </div>);
+}
+
+// ─── Enrichment Coverage Matrix ───
+function EnrichmentCoverage({connectedTools}) {
+  return (<div style={{display:"flex",flexDirection:"column",gap:16}}>
+    {/* Coverage stats */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+      <BigStat label="Types Covered" value={new Set(ENRICHMENT_TOOLS.filter(t=>connectedTools.has(t.id)).flatMap(t=>t.capabilities)).size} sub={`of ${ENRICHMENT_TYPES.length} total`} color={T.green} icon="✅"/>
+      <BigStat label="Redundancy" value={`${ENRICHMENT_TOOLS.filter(t=>connectedTools.has(t.id)).length>1?"Yes":"No"}`} sub="multiple tools per type" color={ENRICHMENT_TOOLS.filter(t=>connectedTools.has(t.id)).length>1?T.green:T.amber} icon="🔄"/>
+      <BigStat label="Avg Match Rate" value={`${connectedTools.size>0?Math.round(ENRICHMENT_TOOLS.filter(t=>connectedTools.has(t.id)).reduce((s,t)=>s+t.avgEnrichRate,0)/connectedTools.size):0}%`} sub="weighted average" color={T.cyan} icon="📊"/>
+      <BigStat label="Tools Connected" value={connectedTools.size} sub={`of ${ENRICHMENT_TOOLS.length}`} color={T.purple} icon="🔌"/>
+    </div>
+
+    {/* Coverage matrix: enrichment type vs tool */}
+    <Card title="Coverage Matrix — Which Tool Covers What">
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",minWidth:700}}>
+          <thead>
+            <tr>
+              <th style={{...thS,minWidth:160}}>Enrichment Type</th>
+              {ENRICHMENT_TOOLS.map(t=><th key={t.id} style={{...thS,textAlign:"center",fontSize:9,minWidth:80,color:connectedTools.has(t.id)?t.color:T.textMuted}}>{t.icon}<br/>{t.name.split(" ")[0]}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {ENRICHMENT_TYPES.map(et=>(
+              <tr key={et.id} style={{borderBottom:`1px solid ${T.border}`}}>
+                <td style={{padding:"10px 10px",fontFamily:sans,fontSize:12}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    <span style={{fontSize:14}}>{et.icon}</span>
+                    <div>
+                      <div style={{fontWeight:600,color:T.text}}>{et.label}</div>
+                      <div style={{fontSize:9,color:T.textMuted}}>{et.desc.substring(0,40)}...</div>
+                    </div>
+                  </div>
+                </td>
+                {ENRICHMENT_TOOLS.map(tool=>{
+                  const has=tool.capabilities.includes(et.id);
+                  const isConn=connectedTools.has(tool.id);
+                  return (
+                    <td key={tool.id} style={{textAlign:"center",padding:8}}>
+                      {has?(
+                        <div style={{width:28,height:28,borderRadius:8,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,background:isConn?`${T.green}20`:`${tool.color}10`,border:`1px solid ${isConn?T.greenSoft:`${tool.color}20`}`}}>
+                          {isConn?"✅":"○"}
+                        </div>
+                      ):(
+                        <span style={{color:T.textMuted,fontSize:10}}>—</span>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{display:"flex",gap:16,marginTop:12,paddingTop:10,borderTop:`1px solid ${T.border}`,fontFamily:sans,fontSize:10,color:T.textMuted}}>
+        <span>✅ = Connected & covers this type</span>
+        <span>○ = Supports but not connected</span>
+        <span>— = Not supported</span>
+      </div>
+    </Card>
+
+    {/* Recommended combos */}
+    <Card title="💡 Recommended Tool Combinations">
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <div style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:10,padding:14}}>
+          <div style={{fontFamily:sans,fontSize:13,fontWeight:600,marginBottom:6}}>🏆 Best for Outbound</div>
+          <div style={{fontFamily:sans,fontSize:11,color:T.textDim,lineHeight:1.6}}>Apollo + Hunter + LinkedIn Sales Nav</div>
+          <div style={{fontFamily:sans,fontSize:10,color:T.textMuted,marginTop:4}}>Covers: contacts, emails, verification, social</div>
+        </div>
+        <div style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:10,padding:14}}>
+          <div style={{fontFamily:sans,fontSize:13,fontWeight:600,marginBottom:6}}>🎯 Best for Account-Based</div>
+          <div style={{fontFamily:sans,fontSize:11,color:T.textDim,lineHeight:1.6}}>ZoomInfo + Clearbit + BuiltWith</div>
+          <div style={{fontFamily:sans,fontSize:10,color:T.textMuted,marginTop:4}}>Covers: firmographics, intent, tech stack, visitors</div>
+        </div>
+        <div style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:10,padding:14}}>
+          <div style={{fontFamily:sans,fontSize:13,fontWeight:600,marginBottom:6}}>💰 Best Budget Stack</div>
+          <div style={{fontFamily:sans,fontSize:11,color:T.textDim,lineHeight:1.6}}>Apollo + Hunter + BuiltWith</div>
+          <div style={{fontFamily:sans,fontSize:10,color:T.textMuted,marginTop:4}}>$-$$ range, covers 5 of 7 enrichment types</div>
+        </div>
+        <div style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:10,padding:14}}>
+          <div style={{fontFamily:sans,fontSize:13,fontWeight:600,marginBottom:6}}>🧬 Maximum Coverage</div>
+          <div style={{fontFamily:sans,fontSize:11,color:T.textDim,lineHeight:1.6}}>Clay (waterfall) + ZoomInfo + LinkedIn</div>
+          <div style={{fontFamily:sans,fontSize:10,color:T.textMuted,marginTop:4}}>96% match rate, all 7 types covered</div>
+        </div>
+      </div>
+    </Card>
+  </div>);
+}
+
+// ═══════════════════════════════════════
+// INTEGRATIONS SECTION
+// ═══════════════════════════════════════
+const INTEGRATIONS = [
+  { id:"n8n", name:"n8n", icon:"⚡", color:"#34D399", desc:"Workflow automation", dataType:"Workflows & executions", category:"Automation" },
+  { id:"hubspot", name:"HubSpot CRM", icon:"🟠", color:"#A78BFA", desc:"CRM & deal pipeline", dataType:"Contacts, deals, pipeline", category:"CRM" },
+  { id:"google_ads", name:"Google Ads", icon:"📢", color:"#60A5FA", desc:"Ad campaigns", dataType:"Campaigns, spend, conversions", category:"Advertising" },
+  { id:"slack", name:"Slack", icon:"💬", color:"#F472B6", desc:"Team communication", dataType:"Alerts & notifications", category:"Communication" },
+  { id:"gmail", name:"Gmail", icon:"📧", color:"#F87171", desc:"Email automation", dataType:"Emails sent & received", category:"Communication" },
+  { id:"sheets", name:"Google Sheets", icon:"📗", color:"#34D399", desc:"Spreadsheet data", dataType:"Rows synced & updated", category:"Data" },
+  { id:"intercom", name:"Intercom", icon:"💭", color:"#60A5FA", desc:"Customer messaging", dataType:"Conversations & tickets", category:"Support" },
+  { id:"linear", name:"Linear", icon:"🔷", color:"#A78BFA", desc:"Issue tracking", dataType:"Issues & projects", category:"Project Mgmt" },
+  { id:"figma", name:"Figma", icon:"🎨", color:"#F472B6", desc:"Design collaboration", dataType:"Files & components", category:"Design" },
+];
+
+function IntegrationsSection({connected,hubData,adsData,slackConfigured,stats,workflows}) {
+  const [subTab,setSubTab]=useState("hub");
+
+  // Build live status for each integration
+  const getStatus = (id) => {
+    switch(id) {
+      case "n8n": return connected ? {status:"connected",lastSync:"Live",dataPoints:stats.totalExecs||0,health:Number(stats.successRate)||0,errors:stats.failedExecs||0} : {status:"disconnected"};
+      case "hubspot": return hubData && !hubData.error ? {status:"connected",lastSync:"Last fetch",dataPoints:hubData.stats?.totalDeals||0,health:92,errors:0} : hubData?.error ? {status:"error",error:hubData.error} : {status:"disconnected"};
+      case "google_ads": return adsData && !adsData.error ? {status:"connected",lastSync:"Last fetch",dataPoints:adsData.totals?.totalClicks||0,health:88,errors:0} : {status:"disconnected"};
+      case "slack": return slackConfigured ? {status:"connected",lastSync:"Active",dataPoints:0,health:100,errors:0} : {status:"disconnected"};
+      default: return {status:"available"};
+    }
+  };
+
+  const integrations = INTEGRATIONS.map(i => ({...i,...getStatus(i.id)}));
+  const connectedCount = integrations.filter(i=>i.status==="connected").length;
+  const errorCount = integrations.filter(i=>i.status==="error").length;
+
+  return (<div>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+      <div>
+        <h2 style={{fontFamily:sans,fontSize:18,fontWeight:700,margin:0}}>Integrations</h2>
+        <p style={{fontFamily:sans,fontSize:12,color:T.textMuted,margin:"4px 0 0"}}>{connectedCount} connected · {errorCount} errors · {INTEGRATIONS.length} total</p>
+      </div>
+      <div style={{display:"flex",gap:4}}>
+        {[{k:"hub",l:"Hub"},{k:"flow",l:"Data Flow"},{k:"health",l:"Health"}].map(t=>
+          <button key={t.k} onClick={()=>setSubTab(t.k)} style={{background:subTab===t.k?T.amberDim:"transparent",color:subTab===t.k?T.amber:T.textMuted,border:subTab===t.k?`1px solid ${T.amberSoft}`:"1px solid transparent",borderRadius:8,padding:"7px 16px",fontFamily:sans,fontSize:12,cursor:"pointer",fontWeight:subTab===t.k?600:400}}>{t.l}</button>
+        )}
+      </div>
+    </div>
+
+    {subTab==="hub"&&<IntegrationHub integrations={integrations}/>}
+    {subTab==="flow"&&<DataFlowMap integrations={integrations} stats={stats} hubData={hubData} adsData={adsData}/>}
+    {subTab==="health"&&<HealthMonitor integrations={integrations}/>}
+  </div>);
+}
+
+// ─── Integration Hub ───
+function IntegrationHub({integrations}) {
+  const statusConfig = {
+    connected:{label:"Connected",color:T.green,bg:T.greenDim,border:T.greenSoft},
+    error:{label:"Error",color:T.red,bg:T.redDim,border:T.redSoft},
+    disconnected:{label:"Not Connected",color:T.textMuted,bg:T.surface2,border:T.border},
+    available:{label:"Available",color:T.textMuted,bg:T.surface2,border:T.border},
+  };
+  const categories = [...new Set(integrations.map(i=>i.category))];
+
+  return (<div style={{display:"flex",flexDirection:"column",gap:16}}>
+    {/* Summary strip */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
+      <BigStat label="Connected" value={integrations.filter(i=>i.status==="connected").length} sub={`of ${integrations.length} integrations`} color={T.green} icon="✅"/>
+      <BigStat label="Data Points Synced" value={integrations.reduce((s,i)=>s+(i.dataPoints||0),0).toLocaleString()} sub="across all integrations" color={T.cyan} icon="🔄"/>
+      <BigStat label="Errors" value={integrations.filter(i=>i.status==="error").length} sub="need attention" color={integrations.some(i=>i.status==="error")?T.red:T.green} icon={integrations.some(i=>i.status==="error")?"⚠️":"✅"}/>
+    </div>
+
+    {/* Integration cards by category */}
+    {categories.map(cat=>(
+      <div key={cat}>
+        <h3 style={{fontFamily:sans,fontSize:12,fontWeight:600,color:T.textMuted,letterSpacing:0.5,textTransform:"uppercase",marginBottom:10}}>{cat}</h3>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:10}}>
+          {integrations.filter(i=>i.category===cat).map(intg=>{
+            const sc = statusConfig[intg.status]||statusConfig.available;
+            return (
+              <div key={intg.id} style={{background:T.surface,border:`1px solid ${intg.status==="connected"?sc.border:T.border}`,borderRadius:12,padding:18,transition:"all 0.2s",position:"relative",overflow:"hidden"}} onMouseEnter={e=>e.currentTarget.style.borderColor=intg.color} onMouseLeave={e=>e.currentTarget.style.borderColor=intg.status==="connected"?sc.border:T.border}>
+                {intg.status==="connected"&&<div style={{position:"absolute",top:0,left:0,right:0,height:2,background:intg.color}}/>}
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div style={{width:36,height:36,borderRadius:10,background:`${intg.color}15`,border:`1px solid ${intg.color}30`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>{intg.icon}</div>
+                    <div>
+                      <div style={{fontFamily:sans,fontSize:14,fontWeight:600}}>{intg.name}</div>
+                      <div style={{fontFamily:sans,fontSize:10,color:T.textMuted}}>{intg.desc}</div>
+                    </div>
+                  </div>
+                  {/* Status badge */}
+                  <div style={{display:"flex",alignItems:"center",gap:5,background:sc.bg,padding:"4px 10px",borderRadius:20,border:`1px solid ${sc.border}`}}>
+                    <div style={{width:6,height:6,borderRadius:"50%",background:sc.color,boxShadow:intg.status==="connected"?`0 0 6px ${sc.color}`:"none"}}/>
+                    <span style={{fontFamily:sans,fontSize:9,color:sc.color,fontWeight:600}}>{sc.label}</span>
+                  </div>
+                </div>
+                {/* Data info */}
+                <div style={{fontFamily:sans,fontSize:11,color:T.textDim,marginBottom:8}}>{intg.dataType}</div>
+                {intg.status==="connected"&&(
+                  <div style={{display:"flex",justifyContent:"space-between",paddingTop:10,borderTop:`1px solid ${T.border}`}}>
+                    <div><span style={{fontFamily:sans,fontSize:10,color:T.textMuted}}>Synced:</span><span style={{fontFamily:mono,fontSize:11,color:T.text,marginLeft:6,fontWeight:600}}>{(intg.dataPoints||0).toLocaleString()}</span></div>
+                    <div><span style={{fontFamily:sans,fontSize:10,color:T.textMuted}}>Status:</span><span style={{fontFamily:sans,fontSize:10,color:T.green,marginLeft:6}}>● Active</span></div>
+                  </div>
+                )}
+                {intg.status==="error"&&(
+                  <div style={{background:T.redDim,borderRadius:6,padding:8,marginTop:4}}>
+                    <span style={{fontFamily:sans,fontSize:10,color:T.red}}>{intg.error||"Connection error — check credentials"}</span>
+                  </div>
+                )}
+                {(intg.status==="disconnected"||intg.status==="available")&&(
+                  <div style={{paddingTop:10,borderTop:`1px solid ${T.border}`}}>
+                    <button style={{background:`${intg.color}15`,color:intg.color,border:`1px solid ${intg.color}30`,borderRadius:8,padding:"6px 16px",fontFamily:sans,fontSize:11,cursor:"pointer",fontWeight:600,width:"100%"}}>Connect {intg.name}</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    ))}
+  </div>);
+}
+
+// ─── Data Flow Map ───
+function DataFlowMap({integrations,stats,hubData,adsData}) {
+  const flows = [
+    {from:"Google Ads",to:"n8n",label:`${adsData?.totals?.totalClicks||"—"} clicks`,color:T.blue,active:!!adsData},
+    {from:"n8n",to:"HubSpot CRM",label:`${hubData?.stats?.totalDeals||"—"} deals`,color:T.purple,active:!!hubData},
+    {from:"n8n",to:"Slack",label:"Failure alerts",color:T.pink,active:integrations.find(i=>i.id==="slack")?.status==="connected"},
+    {from:"Gmail",to:"n8n",label:"Email triggers",color:T.red,active:false},
+    {from:"n8n",to:"Google Sheets",label:"Data exports",color:T.green,active:false},
+    {from:"Intercom",to:"n8n",label:"Support tickets",color:T.blue,active:false},
+    {from:"Linear",to:"n8n",label:"Issue updates",color:T.purple,active:false},
+  ];
+
+  // Pipeline funnel
+  const funnel = [
+    {stage:"Impressions",value:adsData?.totals?.totalImpressions||28400,source:"Google Ads",color:T.blue},
+    {stage:"Clicks",value:adsData?.totals?.totalClicks||890,source:"Google Ads",color:T.blue},
+    {stage:"Leads Captured",value:hubData?.stats?.totalDeals||142,source:"n8n → HubSpot",color:T.green},
+    {stage:"Qualified",value:Math.floor((hubData?.stats?.totalDeals||142)*0.45),source:"n8n Workflow",color:T.amber},
+    {stage:"Won",value:Math.floor((hubData?.stats?.totalDeals||142)*0.18),source:"HubSpot CRM",color:T.purple},
+  ];
+  const maxFunnel=Math.max(...funnel.map(f=>f.value),1);
+
+  return (<div style={{display:"flex",flexDirection:"column",gap:16}}>
+    <Card title="Data Flow Between Tools">
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {flows.map((f,i)=>(
+          <div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",background:f.active?`${f.color}06`:T.bg,border:`1px solid ${f.active?`${f.color}20`:T.border}`,borderRadius:10,opacity:f.active?1:0.5}}>
+            {/* Source */}
+            <div style={{minWidth:120,fontFamily:sans,fontSize:12,fontWeight:600,color:f.active?T.text:T.textMuted}}>{f.from}</div>
+            {/* Arrow with data */}
+            <div style={{flex:1,display:"flex",alignItems:"center",gap:8}}>
+              <div style={{flex:1,height:2,background:f.active?f.color:T.border,borderRadius:1,position:"relative"}}>
+                {f.active&&<div style={{position:"absolute",top:-1,left:"50%",transform:"translateX(-50%)",width:4,height:4,borderRadius:"50%",background:f.color,boxShadow:`0 0 8px ${f.color}`,animation:"flowPulse 2s infinite"}}/>}
+              </div>
+              <span style={{fontFamily:mono,fontSize:10,color:f.active?f.color:T.textMuted,fontWeight:600,whiteSpace:"nowrap"}}>{f.label}</span>
+              <div style={{fontSize:14,color:f.active?f.color:T.textMuted}}>→</div>
+            </div>
+            {/* Destination */}
+            <div style={{minWidth:120,fontFamily:sans,fontSize:12,fontWeight:600,color:f.active?T.text:T.textMuted,textAlign:"right"}}>{f.to}</div>
+            {/* Status */}
+            <div style={{width:8,height:8,borderRadius:"50%",background:f.active?T.green:T.textMuted,boxShadow:f.active?`0 0 6px ${T.green}`:"none"}}/>
+          </div>
+        ))}
+      </div>
+      <style>{`@keyframes flowPulse{0%{left:0%;opacity:0}20%{opacity:1}80%{opacity:1}100%{left:100%;opacity:0}}`}</style>
+    </Card>
+
+    {/* Conversion Funnel */}
+    <Card title="Conversion Funnel — End to End">
+      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+        {funnel.map((f,i)=>{
+          const w=(f.value/maxFunnel)*100;
+          const convRate=i>0?((f.value/funnel[i-1].value)*100).toFixed(1)+"%":"—";
+          return (
+            <div key={i}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontFamily:sans,fontSize:13,fontWeight:600}}>{f.stage}</span>
+                  <span style={{fontFamily:sans,fontSize:9,color:T.textMuted,background:T.surface2,padding:"2px 8px",borderRadius:10}}>{f.source}</span>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:12}}>
+                  {i>0&&<span style={{fontFamily:sans,fontSize:10,color:T.textMuted}}>conv: <span style={{color:T.amber,fontWeight:600}}>{convRate}</span></span>}
+                  <span style={{fontFamily:mono,fontSize:14,fontWeight:700,color:f.color}}><AnimatedNum value={f.value}/></span>
+                </div>
+              </div>
+              <div style={{height:24,borderRadius:6,background:T.surface2,overflow:"hidden",position:"relative"}}>
+                <AnimatedBar height={24} color={`${f.color}60`} delay={i*120} style={{width:`${w}%`,position:"absolute",top:0,left:0,borderRadius:6}}/>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{marginTop:12,paddingTop:10,borderTop:`1px solid ${T.border}`,display:"flex",justifyContent:"space-between"}}>
+        <span style={{fontFamily:sans,fontSize:11,color:T.textMuted}}>Overall conversion: Impression → Won</span>
+        <span style={{fontFamily:mono,fontSize:13,fontWeight:700,color:T.green}}>
+          <AnimatedNum value={funnel.length>1?((funnel[funnel.length-1].value/funnel[0].value)*100):0} suffix="%" decimals={2}/>
+        </span>
+      </div>
+    </Card>
+  </div>);
+}
+
+// ─── Health Monitor ───
+function HealthMonitor({integrations}) {
+  const connected = integrations.filter(i=>i.status==="connected"||i.status==="error");
+  // Simulated uptime data (24 hours, each slot = 1 hour)
+  const genUptime=(health)=>Array.from({length:24},()=>Math.random()*100<(health||80)?"up":"down");
+
+  return (<div style={{display:"flex",flexDirection:"column",gap:16}}>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
+      <BigStat label="Overall Uptime" value="97.2%" sub="last 24 hours" color={T.green} icon="📡"/>
+      <BigStat label="Active Connections" value={connected.length} sub={`of ${integrations.length} total`} color={T.cyan} icon="🔗"/>
+      <BigStat label="Avg Response Time" value="1.2s" sub="across integrations" color={T.amber} icon="⏱"/>
+    </div>
+
+    <Card title="Connection Health — Last 24 Hours">
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        {integrations.map(intg=>{
+          const health=intg.health||0;
+          const uptime=intg.status==="connected"?genUptime(health):genUptime(0);
+          const uptimePct=intg.status==="connected"?`${health}%`:"—";
+          const sc=intg.status==="connected"?T.green:intg.status==="error"?T.red:T.textMuted;
+
+          return (
+            <div key={intg.id} style={{display:"flex",alignItems:"center",gap:14,padding:"10px 0",borderBottom:`1px solid ${T.border}`}}>
+              {/* Icon + name */}
+              <div style={{display:"flex",alignItems:"center",gap:8,minWidth:160}}>
+                <span style={{fontSize:16}}>{intg.icon}</span>
+                <div>
+                  <div style={{fontFamily:sans,fontSize:12,fontWeight:600}}>{intg.name}</div>
+                  <div style={{fontFamily:sans,fontSize:9,color:T.textMuted}}>{intg.status==="connected"?"Connected":intg.status==="error"?"Error":"Offline"}</div>
+                </div>
+              </div>
+              {/* Uptime bar (24 hours) */}
+              <div style={{flex:1,display:"flex",gap:2,alignItems:"center"}}>
+                {uptime.map((s,i)=>(
+                  <div key={i} style={{flex:1,height:20,borderRadius:2,background:s==="up"?`${T.green}50`:`${T.red}30`,transition:"background 0.3s"}} title={`${23-i}h ago: ${s}`}/>
+                ))}
+              </div>
+              {/* Uptime % */}
+              <div style={{minWidth:60,textAlign:"right"}}>
+                <div style={{fontFamily:mono,fontSize:14,fontWeight:700,color:sc}}>{uptimePct}</div>
+                <div style={{fontFamily:sans,fontSize:8,color:T.textMuted}}>uptime</div>
+              </div>
+              {/* Status dot */}
+              <div style={{width:10,height:10,borderRadius:"50%",background:sc,boxShadow:intg.status==="connected"?`0 0 8px ${sc}`:"none"}}/>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{marginTop:10,display:"flex",gap:16,fontSize:10,color:T.textMuted,fontFamily:sans}}>
+        <span><span style={{display:"inline-block",width:10,height:8,borderRadius:2,background:`${T.green}50`,marginRight:4}}/>Up</span>
+        <span><span style={{display:"inline-block",width:10,height:8,borderRadius:2,background:`${T.red}30`,marginRight:4}}/>Down</span>
+        <span style={{marginLeft:"auto"}}>← 24h ago · Now →</span>
+      </div>
+    </Card>
+  </div>);
+}
+
+// ═══════════════════════════════════════
+// KPIs (Enhanced with Source Attribution)
+// ═══════════════════════════════════════
 function KPIs({workflows,stats,hubData,adsData}) {
   const costPerLead=adsData?.totals?.totalSpend&&adsData?.totals?.totalConversions?`$${(Number(adsData.totals.totalSpend)/Number(adsData.totals.totalConversions)).toFixed(0)}`:"—";
+  const costPerDealWon=adsData?.totals?.totalSpend&&hubData?.stats?.totalDeals?`$${(Number(adsData.totals.totalSpend)/Math.max(Math.floor(Number(hubData.stats.totalDeals)*0.18),1)).toFixed(0)}`:"—";
+  const roiEstimate=hubData?.stats?.totalValue&&adsData?.totals?.totalSpend?`${((Number(hubData.stats.totalValue)/Number(adsData.totals.totalSpend))*100).toFixed(0)}%`:"—";
+  const timeSaved=stats.totalExecs?`${Math.floor(stats.totalExecs*2.5)}min`:"—"; // ~2.5 min saved per automation
+
   return (<>
-    <div style={{marginBottom:14}}><h2 style={{fontFamily:sans,fontSize:16,fontWeight:700,margin:0}}>Cross-Platform KPIs</h2><p style={{fontFamily:sans,fontSize:12,color:T.textMuted,margin:"4px 0 0"}}>Unified metrics across n8n, HubSpot, and Google Ads</p></div>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:20}}>
-      <BigStat label="Automation Success" value={`${stats.successRate}%`} sub="n8n reliability" color={Number(stats.successRate)>=80?T.green:T.red} icon="⚡" highlight={Number(stats.successRate)<60}/>
-      <BigStat label="Pipeline Deals" value={hubData?.stats?.totalDeals||"—"} sub="HubSpot CRM" color={T.purple} icon="💼"/>
-      <BigStat label="Ad Spend" value={adsData?.totals?.totalSpend?`$${Number(adsData.totals.totalSpend).toLocaleString()}`:"—"} sub="Google Ads" color={T.blue} icon="📈"/>
-      <BigStat label="Conversions" value={adsData?.totals?.totalConversions||"—"} sub="from ads" color={T.green} icon="✅"/>
-      <BigStat label="Cost Per Lead" value={costPerLead} sub="ads ÷ conversions" color={T.amber} icon="💰"/>
-      <BigStat label="Win Rate" value={hubData?.stats?.winRate||"—"} sub="deal close rate" color={T.cyan} icon="🏆"/>
+    <div style={{marginBottom:14}}><h2 style={{fontFamily:sans,fontSize:18,fontWeight:700,margin:0}}>Cross-Platform KPIs</h2><p style={{fontFamily:sans,fontSize:12,color:T.textMuted,margin:"4px 0 0"}}>Every metric shows which tool it comes from</p></div>
+
+    {/* Row 1: Core Revenue Metrics */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:12}}>
+      <KPICard label="Pipeline Value" value={hubData?.stats?.totalValue?`$${Number(hubData.stats.totalValue).toLocaleString()}`:"—"} source="HubSpot" sourceColor={T.purple} sourceIcon="🟠" color={T.green} icon="💰"/>
+      <KPICard label="Ad Spend" value={adsData?.totals?.totalSpend?`$${Number(adsData.totals.totalSpend).toLocaleString()}`:"—"} source="Google Ads" sourceColor={T.blue} sourceIcon="📢" color={T.red} icon="💳"/>
+      <KPICard label="ROI Estimate" value={roiEstimate} source="HubSpot + Ads" sourceColor={T.amber} sourceIcon="🔗" color={T.cyan} icon="📊"/>
+      <KPICard label="Cost Per Deal Won" value={costPerDealWon} source="Ads ÷ HubSpot" sourceColor={T.amber} sourceIcon="🔗" color={T.amber} icon="🏆"/>
     </div>
+
+    {/* Row 2: Conversion Metrics */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:12}}>
+      <KPICard label="Conversions" value={adsData?.totals?.totalConversions||"—"} source="Google Ads" sourceColor={T.blue} sourceIcon="📢" color={T.green} icon="✅"/>
+      <KPICard label="Cost Per Lead" value={costPerLead} source="Ads ÷ Conversions" sourceColor={T.amber} sourceIcon="🔗" color={T.amber} icon="💸"/>
+      <KPICard label="Win Rate" value={hubData?.stats?.winRate||"—"} source="HubSpot" sourceColor={T.purple} sourceIcon="🟠" color={T.cyan} icon="🎯"/>
+      <KPICard label="Open Deals" value={hubData?.stats?.openDeals||hubData?.stats?.totalDeals||"—"} source="HubSpot" sourceColor={T.purple} sourceIcon="🟠" color={T.purple} icon="💼"/>
+    </div>
+
+    {/* Row 3: Automation Metrics */}
+    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:16}}>
+      <KPICard label="Automation Rate" value={`${stats.successRate}%`} source="n8n" sourceColor={T.green} sourceIcon="⚡" color={Number(stats.successRate)>=80?T.green:T.red} icon={Number(stats.successRate)>=80?"✅":"⚠️"} highlight={Number(stats.successRate)<60}/>
+      <KPICard label="Time Saved" value={timeSaved} source="n8n" sourceColor={T.green} sourceIcon="⚡" color={T.cyan} icon="⏱"/>
+      <KPICard label="Errors Prevented" value={stats.totalExecs?Math.floor(stats.totalExecs*0.92):0} source="n8n" sourceColor={T.green} sourceIcon="⚡" color={T.green} icon="🛡"/>
+      <KPICard label="Active Automations" value={stats.activeWorkflows} source="n8n" sourceColor={T.green} sourceIcon="⚡" color={T.blue} icon="🔄"/>
+    </div>
+
+    {/* Detail cards */}
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-      <Card title="Automation Health">
+      <Card title="Automation Health (n8n)">
         <Metric label="Active workflows" value={stats.activeWorkflows} total={stats.totalWorkflows} color={T.green}/>
         <Metric label="Total executions" value={stats.totalExecs?.toLocaleString()} color={T.cyan}/>
         <Metric label="Failed" value={stats.failedExecs?.toLocaleString()} sub={stats.totalExecs>0?`${((stats.failedExecs/stats.totalExecs)*100).toFixed(1)}%`:""} color={T.red}/>
         <Metric label="Avg duration" value={fmt(stats.avgDuration)} color={T.textDim}/>
       </Card>
-      <Card title="Funnel Overview">
+      <Card title="Ad → Lead Funnel">
         {adsData?.totals?(<>
           <Metric label="Impressions" value={adsData.totals.totalImpressions?.toLocaleString()} color={T.blue}/>
           <Metric label="Clicks" value={adsData.totals.totalClicks?.toLocaleString()} color={T.cyan}/>
+          <Metric label="CTR" value={adsData.totals.avgCTR} color={T.amber}/>
           <Metric label="Conversions" value={adsData.totals.totalConversions} color={T.green}/>
         </>):<p style={{fontFamily:sans,fontSize:12,color:T.textMuted}}>Load Google Ads data to see funnel</p>}
-        {hubData?.stats?(<Metric label="Pipeline value" value={hubData.stats.totalValue?`$${Number(hubData.stats.totalValue).toLocaleString()}`:"—"} color={T.purple}/>):<p style={{fontFamily:sans,fontSize:12,color:T.textMuted}}>Load HubSpot data to see pipeline</p>}
+        {hubData?.stats?(<Metric label="Pipeline value" value={hubData.stats.totalValue?`$${Number(hubData.stats.totalValue).toLocaleString()}`:"—"} color={T.purple}/>):<p style={{fontFamily:sans,fontSize:12,color:T.textMuted}}>Load HubSpot to see pipeline</p>}
       </Card>
     </div>
-    {!hubData&&!adsData&&<div style={{marginTop:20,textAlign:"center",padding:32,color:T.textMuted,fontFamily:sans,fontSize:13,background:T.surface,borderRadius:12,border:`1px solid ${T.border}`}}>Load HubSpot and Google Ads from their tabs to see all KPIs here</div>}
+    {!hubData&&!adsData&&<div style={{marginTop:20,textAlign:"center",padding:32,color:T.textMuted,fontFamily:sans,fontSize:13,background:T.surface,borderRadius:12,border:`1px solid ${T.border}`}}>Load HubSpot and Google Ads from their tabs to populate all KPIs</div>}
   </>);
 }
 
@@ -776,13 +1520,24 @@ function Card({title,children,style:s}) {
 }
 
 function BigStat({label,value,sub,color,icon,highlight}) {
+  // Parse value for animation
+  const isPercentage = typeof value === "string" && value.endsWith("%");
+  const isDuration = typeof value === "string" && (value.includes("m") || value.includes("s") || value.includes("h"));
+  const isDollar = typeof value === "string" && value.startsWith("$");
+  const rawNum = typeof value === "string" ? parseFloat(value.replace(/[^0-9.-]/g, "")) : value;
+  const canAnimate = !isNaN(rawNum) && isFinite(rawNum) && !isDuration;
+
   return (
     <div style={{background:T.surface,border:`1px solid ${highlight?`${T.red}40`:T.border}`,borderRadius:12,padding:16,position:"relative",overflow:"hidden"}}>
       {highlight&&<div style={{position:"absolute",top:0,left:0,right:0,height:3,background:T.redGrad}}/>}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
         <div>
           <div style={{fontFamily:sans,fontSize:10,color:T.textMuted,marginBottom:6,fontWeight:500,letterSpacing:0.5}}>{label}</div>
-          <div style={{fontFamily:mono,fontSize:26,fontWeight:700,color,lineHeight:1}}>{value}</div>
+          <div style={{fontFamily:mono,fontSize:26,fontWeight:700,color,lineHeight:1}}>
+            {canAnimate ? (
+              <AnimatedNum value={rawNum} prefix={isDollar?"$":""} suffix={isPercentage?"%":""} decimals={isPercentage?1:0} />
+            ) : value}
+          </div>
           {sub&&<div style={{fontFamily:sans,fontSize:10,color:T.textMuted,marginTop:4}}>{sub}</div>}
         </div>
         {icon&&<span style={{fontSize:20,opacity:0.6}}>{icon}</span>}
@@ -800,6 +1555,31 @@ function Metric({label,value,total,sub,color}) {
       {sub&&<span style={{fontFamily:sans,fontSize:10,color:T.textMuted}}>({sub})</span>}
     </div>
   </div>);
+}
+
+function KPICard({label,value,source,sourceColor,sourceIcon,color,icon,highlight}) {
+  const rawNum = typeof value === "string" ? parseFloat(value.replace(/[^0-9.-]/g, "")) : value;
+  const isPercentage = typeof value === "string" && value.includes("%");
+  const isDollar = typeof value === "string" && value.startsWith("$");
+  const canAnimate = !isNaN(rawNum) && isFinite(rawNum) && typeof value !== "undefined" && value !== "—";
+
+  return (
+    <div style={{background:T.surface,border:`1px solid ${highlight?`${T.red}40`:T.border}`,borderRadius:12,padding:14,position:"relative",overflow:"hidden"}}>
+      {highlight&&<div style={{position:"absolute",top:0,left:0,right:0,height:3,background:T.redGrad}}/>}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+        <div style={{fontFamily:sans,fontSize:10,color:T.textMuted,fontWeight:500,letterSpacing:0.3}}>{label}</div>
+        {icon&&<span style={{fontSize:16,opacity:0.5}}>{icon}</span>}
+      </div>
+      <div style={{fontFamily:mono,fontSize:22,fontWeight:700,color,lineHeight:1,marginBottom:10}}>
+        {canAnimate?<AnimatedNum value={rawNum} prefix={isDollar?"$":""} suffix={isPercentage?"%":""} decimals={isPercentage?1:0}/>:value}
+      </div>
+      {/* Source attribution badge */}
+      <div style={{display:"flex",alignItems:"center",gap:5,background:`${sourceColor}10`,padding:"4px 8px",borderRadius:8,border:`1px solid ${sourceColor}20`,width:"fit-content"}}>
+        <span style={{fontSize:10}}>{sourceIcon}</span>
+        <span style={{fontFamily:sans,fontSize:9,color:sourceColor,fontWeight:600}}>{source}</span>
+      </div>
+    </div>
+  );
 }
 
 function StatusBadge({status}) {
